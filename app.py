@@ -8,6 +8,8 @@
 
 import os
 import ast
+from hubspot import HubSpot
+from hubspot.crm.contacts import PublicObjectSearchRequest, ApiException
 from dotenv import load_dotenv
 from apiflask import APIFlask, Schema, HTTPTokenAuth, PaginationSchema, pagination_builder, abort
 from apiflask.fields import Integer, String, Boolean, Date, List, Nested
@@ -21,14 +23,18 @@ from sqlalchemy import text, func
 from sqlalchemy.sql import union_all
 
 # Set how this API should be titled and the current version
-API_TITLE='Events API for Watson Assistant'
+API_TITLE='Events API for Watsonx Assistant'
 API_VERSION='1.0.1'
+
+
 
 # create the app
 app = APIFlask(__name__, title=API_TITLE, version=API_VERSION)
 
 # load .env if present
 load_dotenv()
+
+api_client = HubSpot(access_token=os.getenv('HUBSPOT_TOKEN'))
 
 # the secret API key, plus we need a username in that record
 API_TOKEN="{{'{0}':'appuser'}}".format(os.getenv('API_TOKEN'))
@@ -152,6 +158,13 @@ class CerttsOutSchema(Schema):
     certs = List(Nested(CertOutSchema))
     pagination = Nested(PaginationSchema)
 
+class InUser(Schema):
+    user_id = String
+    user_name = String
+    user_email = String
+    user_preferences = String
+    user_language = String    
+
 # register a callback to verify the token
 @auth.verify_token  
 def verify_token(token):
@@ -161,46 +174,41 @@ def verify_token(token):
         return None
 
 #get records by validity date(no date)
-@app.get('/certifications/nodate')
-@app.output(CertOutSchema)
-@app.auth_required(auth)
-@app.input(CertQuerySchema, 'query')
-def get_nodate_certs(query):
-    """Get certifications
-    Retrieve all certification records that do not expire
+@app.get('/preferences/<string:email>')
+
+@app.input(InUser)
+def get_preferences(email):
+    """Get charity preferences
+    Retrieve all charity preferences by user email
     """
-    
-    pagination = CertModel.query.filter(
-        CertModel.expirydate.is_(None)
-    ).paginate(
-        page=query['page'],
-        per_page=query['per_page']
+    public_object_search_request = PublicObjectSearchRequest(
+    filter_groups=[
+        {
+            "filters": [
+                {
+                    "value": email,
+                    "propertyName": "email",
+                    "operator": "EQ"
+                }
+            ]
+        }
+    ], limit=1
     )
+    try:
+        api_response = api_client.crm.contacts.search_api.do_search(public_object_search_request=public_object_search_request)
+        print(api_response)
+        return jsonify({
+            "table": valid_certs_table,
+            "pagination": certs_data['pagination'],
+            "message": "Certification data retrieved successfully"
+        })
+    except ApiException as e:
+        print("Exception when calling search_api->do_search: %s\n" % e)
+        return jsonify({
+            "message": "Not successful"
+        })
     
-    certs_data = {
-        'certs': pagination.items,
-        'pagination': pagination_builder(pagination)
-    }
-
-    # Start building the HTML table
-    table_html = "<table border='1'><tr><th>Name</th><th>CertificateType</th><th>CertificateDescription</th><th>CertificateLink</th><th>ExpirationDate</th></tr>"
-
-    # Add each valid certification to the table
-    for cert in certs_data['certs']:
-        table_html += f"<tr><td>{html.escape(cert.employeename)}</td><td>{html.escape(cert.certificatetype)}</td><td>{html.escape(cert.certificatedescription)}</td><td>{html.escape(cert.certificatelink)}</td><td>{html.escape(str(cert.expirydate))}</td></tr>"
-
-    # Close the table
-    table_html += "</table>"
-
-    # Store the table in a variable
-    valid_certs_table = table_html
-
-    # Return the table as part of a JSON response
-    return jsonify({
-        "table": valid_certs_table,
-        "pagination": certs_data['pagination'],
-        "message": "Certification data retrieved successfully"
-    })
+    
 
 #get records by validity date (invalid)
 @app.get('/certifications/invalid')
